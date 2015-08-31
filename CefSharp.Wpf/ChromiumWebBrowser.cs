@@ -8,13 +8,18 @@ using CefSharp.Wpf.Rendering;
 using Microsoft.Win32.SafeHandles;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Shapes;
 using System.Windows.Threading;
 
 namespace CefSharp.Wpf
@@ -278,12 +283,42 @@ namespace CefSharp.Wpf
 
             UiThreadRunAsync(delegate
             {
+                var parent = Application.Current.MainWindow.Content as FrameworkElement;
+                parent.PreviewDragOver += ChromiumWebBrowserPreviewDragOver;
+                parent.PreviewDrop += AdornerLayer_PreviewDrop;
+                parent.AllowDrop = true;
+
+                var adornerLayer = AdornerLayer.GetAdornerLayer(parent);
+                _dragAdorner = new DragAdorner(this, adornerLayer);
+                _dragAdorner.UpdatePosition(x, y);
+
                 var results = DragDrop.DoDragDrop(this, dataObject, GetDragEffects(mask));
                 managedCefBrowserAdapter.OnDragSourceEndedAt(0, 0, GetDragOperationsMask(results));
                 managedCefBrowserAdapter.OnDragSourceSystemDragEnded();
+
+                parent.PreviewDragOver -= ChromiumWebBrowserPreviewDragOver;
+                parent.PreviewDrop -= AdornerLayer_PreviewDrop;
             });
 
             return true;
+        }
+
+        private void AdornerLayer_PreviewDrop(object sender, DragEventArgs e)
+        {
+            _dragAdorner.Destroy();
+        }
+
+        private void ChromiumWebBrowserPreviewDragOver(object sender, DragEventArgs e)
+        {
+            UpdateDragAdorner(e.GetPosition(this));
+        }
+
+        private void UpdateDragAdorner(Point currentPosition)
+        {
+            if (_dragAdorner != null)
+            {
+                _dragAdorner.UpdatePosition(currentPosition.X, currentPosition.Y);
+            }
         }
 
         void IRenderWebBrowser.InvokeRenderAsync(BitmapInfo bitmapInfo)
@@ -739,6 +774,8 @@ namespace CefSharp.Wpf
 
         public static readonly DependencyProperty WebBrowserProperty =
             DependencyProperty.Register("WebBrowser", typeof(IWebBrowser), typeof(ChromiumWebBrowser), new UIPropertyMetadata(defaultValue: null));
+
+        private DragAdorner _dragAdorner;
 
         #endregion WebBrowser dependency property
 
@@ -1258,6 +1295,77 @@ namespace CefSharp.Wpf
         public IBrowser GetBrowser()
         {
             return managedCefBrowserAdapter == null ? null : managedCefBrowserAdapter.GetBrowser();
+        }
+    }
+
+    public class DragAdorner : Adorner
+    {
+        private readonly AdornerLayer adornerLayer;
+        private double leftOffset;
+        private double topOffset;
+        private ContentPresenter contentPresenter;
+
+        public DragAdorner(UIElement adornedElement, AdornerLayer adornerLayer)
+            : base(adornedElement)
+
+        {
+            this.adornerLayer = adornerLayer;
+            contentPresenter = new ContentPresenter()
+            {
+                Content = new Border
+                {
+                    Width = 600,
+                    Height = 400
+                },
+                Opacity = 0.75,
+                UseLayoutRounding = true,
+            };
+            this.adornerLayer.Add(this);
+        }
+
+        protected override Size MeasureOverride(Size constraint)
+        {
+            contentPresenter.Measure(constraint);
+            return contentPresenter.DesiredSize;
+        }
+
+        protected override Size ArrangeOverride(Size finalSize)
+        {
+            contentPresenter.Arrange(new Rect(finalSize));
+            return finalSize;
+        }
+
+        protected override Visual GetVisualChild(int index)
+        {
+            return contentPresenter;
+        }
+
+        protected override int VisualChildrenCount
+        {
+            get { return 1; }
+        }
+
+        public void UpdatePosition(double left, double top)
+        {
+            leftOffset = left;
+            topOffset = top;
+            if (adornerLayer != null)
+            {
+                adornerLayer.Update(this.AdornedElement);
+            }
+        }
+
+        public override GeneralTransform GetDesiredTransform(GeneralTransform transform)
+        {
+            GeneralTransformGroup result = new GeneralTransformGroup();
+            result.Children.Add(base.GetDesiredTransform(transform));
+            result.Children.Add(new TranslateTransform(leftOffset, topOffset));
+            return result;
+        }
+
+        public void Destroy()
+        {
+            adornerLayer.Remove(this);
         }
     }
 }
